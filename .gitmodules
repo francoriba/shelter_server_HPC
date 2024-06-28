@@ -1,0 +1,6 @@
+[submodule "lib/cppSocket"]
+	path = lib/cppSocket
+	url = git@github.com:ICOMP-UNC/cppSocketLib.git
+[submodule "lib/rocksDbWrapper"]
+	path = lib/rocksDbWrapper
+	url = git@github.com:ICOMP-UNC/rocksDbWrapper.git

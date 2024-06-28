@@ -1,0 +1,12 @@
+name: "Build"
+description: "Executes a compilation."
+
+runs:
+  using: "composite"
+  steps:
+      - name: Configuration and compilation
+        shell: bash
+        run: |
+          echo "Running command: cmake -DCMAKE_BUILD_TYPE=Debug -DRUN_COVERAGE=1 .. && make -j2"
+          mkdir -p build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Debug -DRUN_COVERAGE=1 .. && make -j2
