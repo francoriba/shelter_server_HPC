@@ -1,5 +1,9 @@
 # H.P.CPP (Hope. Programming. CPP)
 
+<details>
+<summary> Problem to solve..</summary>
+
+
 ## 🎯 Objectives
 
 The main objective of this laboratory is to train students in the efficient design and implementation of computer vision algorithms using High-Performance Computing (HPC) techniques. Participants are expected to acquire advanced knowledge of task parallelism, specifically through the use of OpenMP and C++ standard parallelism, and to be capable of properly profiling their applications. Furthermore, students are required to transform the tasks from the previous lab, "Development of Monitoring Application for Resistance", refactor the client-server model from C to C++, efficiently integrating HPC concepts to enhance performance.
@@ -225,3 +229,134 @@ int main(int argc, char *argv[]) {
 </details>
 
 - **RESTful API with [Ulfius](https://github.com/babelouest/ulfius)**: Clients are implemented using the Ulfius framework to make RESTful requests, enabling efficient communication with the central server.
+
+</details>
+
+
+<details>
+<summary>Milestione 2 Description</summary>
+
+For server-modules interactions I kept the IPC mechanisms used in the previos lab, with changes to addapt to cpp.
+
+Now when the server gets a client request to update supplies, if the update is successful the data will be writen to Rocksdb. This way later historic data can be accessed. Same with infection alerts and power outage notifications, all these are stored as events in rocks db.
+
+In the server there is a new child process to handle requests from the API REST
+
+Each entry en rocksdb has a special formatr for it's key:
+
+supplies_<id>_<timestamp>; <value>
+alert_<id>_<timestamp>; <value>
+notification_<id>_<timestamp>; <value>
+The REST API supports request to this endpoints:
+
+/alerts: all alerts recieved in json format
+
+It can be passed as argument to the request for a specific json format alert. Id "latest" returns the latests supplies update
+curl -G http://localhost:8015/alerts --data-urlencode 'id=0'
+curl -G http://localhost:8015/supplies --data-urlencode 'id=latest'
+/supplies : all supplies updates in json format
+
+Id can be passed as argument to the request for a specific json format supplies status
+curl -G http://localhost:8015/supplies --data-urlencode 'id=0'
+curl -G http://localhost:8015/alerts --data-urlencode 'id=latest'
+Only TCP clients can requesAt images to the server
+
+Now when we run the server, the existence of 3 directories is checked, creating them if they dont exists. This directories are
+
+/img/inputImg: available image for clients to trigger convertion.
+/img/outputImg: here all the images of the diferent stages of canny are stored. They will be overwritten with each new processed image.
+/img/zipFiles: here are stored .zip with compressed images.
+When a client requests a image, a list all of all available images the server has will be given. The client can choose what image wants the server to send to him.
+
+When a client requests to convert a certain image, the server will first see if the corresponding zip for that image already exists, in wich case it will not trigger a new canny convertion, avoiding proceessing a image that is been processed previously.
+
+Downside of the previous bullet is that zip files will accumulate in the zipFiles folder, so ideally (i'll do it if i have time) there should be a mechanism to avoid this. For example:
+
+Each time a new .zip is generated, remove the less recently used.
+When there is X amont of files, remove 50 random files, or 50 less recenlty used.
+For file compression into .zip I'm using zlib.
+
+One problem of my current implmentation is that when a client is receiving a ZIP file it cant receive other messages from the server like alerts of shout down signals.
+</details>
+
+
+
+<details>
+<summary>Application profiling</summary>
+
+
+### Canny Edge Filter Profiling
+
+#### Here I explain were I decided to use parallelism.
+
+* **applyGaussianBlur()**
+
+    * **Creation of the temporary image with edges**: the 5 sets of 2 nested for loops involved here do not seem to me to be good places to parallelise the program as although it would be possible (because there are no dependencies between the individual pixel assignments), I think the overhead introduced by the creation and management of multiple threads may outweigh the benefit of parallelising these low computational complexity operations.
+    * **Kernel creation**: this operation must be sequential as each kernel element depends on the computation of the previous ones.
+    * **Filter application**: Here we have a triple loop that iterates over each pixel of the temporary image and performs an operation with the kernel, this operation is highly parallelisable for the two outer loops, as each pixel can be processed independently. The inner loops cannot be parallelised as they are cumulative sum loops, so there is dependency on previous data. In addition, the inner loops are quite short, so there is no justification for introducing the additional synchronisation overhead that parallelising them would require. 
+
+
+* **sobelOperator()**
+* The main loop iterates over each pixel in the image and calculates the gradients in the X and Y directions using Sobel kernels. This part of the code is highly parallelisable, as each pixel is processed independently and the gradient calculations are simple operations and have no inter-pixel dependencies.
+
+* **nonMaximumSuppression()**
+    * Here the function iterates over each pixel of the gradient magnitude image (m_magnitude) to perform non-maximum suppression. Each pixel is processed independently, suggesting that there is potential for parallelism in this loop.
+    
+* **checkContours()**
+    * The function uses recursion to follow weak contours in the edge image. Each recursive call processes one pixel and then calls itself to process neighbouring pixels.  Recursion makes parallelisation difficult and I would avoid applying it here. However, we can try refactoring the function to make it iterative and see if parallelising after that change generates any improvement.
+
+* **applyLinkingAndHysteresis()**
+In this function we can parallelise the identification of strong and weak edges. We have a loop that goes through each pixel of the image and assigns the pixels to the strongEdges and weakEdges arrays according to the threshold criteria. This loop can be parallelised, as each iteration is independent and there are no dependencies between pixels.
+
+- **Function `applyGaussianBlur`:**
+   - I parallelized the main loop where the Gaussian blur convolution filter is applied.
+
+- **Function `sobelOperator`:**
+   - I parallelized the main loop where gradients are calculated using Sobel kernels.
+
+- **Function `nonMaximumSuppression`:**
+   - I didn't directly apply parallelism in this function due to its recursive structure. However, I identified the loop for exploring neighbors as a potential candidate for parallelization after refactoring.
+
+- **Function `applyLinkingAndHysteresis`:**
+   - I parallelized the first loop where strong and weak edges are identified based on the specified thresholds.
+
+
+### Time analysis:
+
+Test Image: Satellite2.tif (the one of bigger size- 361,7 MB ) 
+
+* Intel I7 7700K - 32GB RAM - 4 cores and 8 threads: 
+
+| Execution | Without Optimization | With Optimization -O3 |
+|-----------|----------------------|-----------------------|
+| 1         | 38.0491 s            | 25.6778 s             |
+| 2         | 37.8012 s            | 25.9013 s             |
+| 3         | 38.2123 s            | 25.5695 s             |
+| 4         | 38.0156 s            | 25.7882 s             |
+| 5         | 38.1024 s            | 25.6221 s             |
+| 6         | 37.9337 s            | 25.7098 s             |
+| 7         | 38.1568 s            | 25.6463 s             |
+| 8         | 37.8975 s            | 25.8204 s             |
+| 9         | 38.0832 s            | 25.7446 s             |
+| 10        | 37.9754 s            | 25.6759 s             |
+| **Average** | **38.0272 s**       | **25.7269 s**          |
+
+Shortest time with optimization: 25.5695 s  
+Shortest time without optimization: 37.8012 s
+
+</details>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
